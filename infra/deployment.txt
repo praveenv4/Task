@@ -1,0 +1,12 @@
+#terraform version: v1.0.11
+# to deploy project a
+terraform init
+terraform workspace new project_a
+terraform plan -var-file project_a.tfvars
+terraform apply -var-file project_a.tfvars -auto-approve
+
+# to deploy project b
+terraform init
+terraform workspace new project_b
+terraform plan -var-file project_b.tfvars
+terraform apply -var-file project_b.tfvars -auto-approve
