@@ -1,0 +1,210 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: This template creates Lambda functions, CloudWatch rules to Start and Stop the AppStream Fleets as per the Cron expressions.
+
+Parameters:
+  Region:
+    Type: String
+    Default: us-east-1
+  MemorySize:
+    Type: String
+    Default: 128
+  Timeout:
+    Type: String
+    Default: 300
+  StartAppStreamFleetsAt:
+    Type: String
+    Default: 'cron(30 10 ? * MON-FRI *)'
+    Description: Cron Expression for Cloudwatch to start the AppStream Fleets.
+  StopAppStreamFleetsAt:
+    Type: String
+    Default: 'cron(00 02 ? * MON-FRI *)'
+    Description: Cron Expression for Cloudwatch to stop the AppStream Fleets.
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: "LambdaExecutionRolePolicy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - appstream:Describe*
+                  - appstream:Get*
+                  - appstream:List*
+                  - appstream:Stop*
+                  - appstream:Start*
+                Resource: '*'
+
+  AppStreamStartLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "This Lambda function starts the AppStream fleets"
+      FunctionName: AppStreamStartFleets
+      Handler: index.lambda_handler
+      Runtime: 'python3.9'
+      Timeout: !Ref Timeout
+      MemorySize: !Ref MemorySize
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          region: !Ref Region
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          from botocore.exceptions import ClientError
+          import time
+          import os
+          region=os.environ['region']
+          client = boto3.client('appstream')
+
+          def lambda_handler(event, context):
+              FleetList = []
+              def loop_fleets(response):
+                for i in range (0,len(response['Fleets'])):
+                  station=response['Fleets'][i]['Name']
+                  FleetList.append(station)
+
+              loop = client.describe_fleets()
+              loop_fleets(loop)
+
+              try:
+                  flag = True
+                  while flag:
+                      next=loop['NextToken']
+                      loop=client.describe_fleets( NextToken=next)
+                      loop_fleets(loop)
+              except Exception as e:
+                  print ("Done with the Fleets")
+
+              for i in FleetList:
+                  try:
+                      response = client.start_fleet(Name=i)
+                      time.sleep(1)
+                      print(i +" Fleet Started")
+                      continue
+                  except ClientError as e:
+                      print ("Unexpected Error:", e)
+                      errorText = e.response['Error']['Message']
+                      print ("Error Text: ", errorText)
+                      pass
+    DependsOn:
+    - LambdaExecutionRole
+
+  AppStreamStartRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "This CloudWatch rule invokes the AppStreamStartFleets Lambda Function to start the fleets"
+      ScheduleExpression: !Ref StartAppStreamFleetsAt
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt AppStreamStartLambdaFunction.Arn
+          Id: "AppStreamStartRule"
+    DependsOn: AppStreamStartLambdaFunction
+
+  AppStreamStartLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${AppStreamStartLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${AppStreamStartRule.Arn}
+    DependsOn: AppStreamStartLambdaFunction
+## Below resources creates Lambda, CloudWatch rules for stop AppStream Fleets
+  AppStreamStopLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "This Lambda function stops the AppStream fleets"
+      FunctionName: AppStreamStopFleets
+      Handler: index.lambda_handler
+      Runtime: 'python3.9'
+      Timeout: !Ref Timeout
+      MemorySize: !Ref MemorySize
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          region: !Ref Region
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          from botocore.exceptions import ClientError
+          import time
+          import os
+
+          region=os.environ['region']
+          client = boto3.client('appstream')
+
+          def lambda_handler(event, context):
+
+              FleetList = []
+              def loop_fleets(response):
+                for i in range (0,len(response['Fleets'])):
+                  station=response['Fleets'][i]['Name']
+                  FleetList.append(station)
+
+              loop = client.describe_fleets()
+              loop_fleets(loop)
+
+              try:
+                  flag = True
+                  while flag:
+                      next=loop['NextToken']
+                      loop=client.describe_fleets( NextToken=next)
+                      loop_fleets(loop)
+              except Exception as e:
+                  print ("Done with the Fleets")
+
+              for i in FleetList:
+                  try:
+                      response = client.stop_fleet(Name=i)
+                      time.sleep(1)
+                      print(i +" Fleet stopped")
+                      continue
+                  except ClientError as e:
+                      print ("Unexpected Error:", e)
+                      errorText = e.response['Error']['Message']
+                      print ("Error Text: ", errorText)
+                      pass
+
+    DependsOn:
+    - LambdaExecutionRole
+
+  AppStreamStopRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "This CloudWatch rule invokes the AppStreamStopFleets Lambda Function to stop the fleets"
+      ScheduleExpression: !Ref StopAppStreamFleetsAt
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt AppStreamStopLambdaFunction.Arn
+          Id: "AppStreamStopRule"
+    DependsOn: AppStreamStopLambdaFunction
+
+  AppStreamStopLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${AppStreamStopLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${AppStreamStopRule.Arn}
+    DependsOn: AppStreamStopLambdaFunction
