@@ -23,10 +23,6 @@ Resources:
           Version: '2012-10-17'
           Statement:
           - Action:
-            - cloudformation:*
-            Effect: Allow
-            Resource: "*"
-          - Action:
             - ec2:Describe*
             - ec2:DetachInternetGateway
             - ec2:DeleteInternetGateway
