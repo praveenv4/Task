@@ -30,7 +30,7 @@ Resources:
             Effect: Allow
             Resource: "*"
           - Action:
-            - ec2:DescribeRegions
+            - ec2:Describe*
             - ec2:DetachInternetGateway
             - ec2:DeleteInternetGateway
             - ec2:DeleteSubnet
