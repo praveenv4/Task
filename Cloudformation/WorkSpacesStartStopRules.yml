@@ -1,0 +1,198 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: This template creates Lambda functions, CloudWatch rules to Start and Stop the Workspaces  as per the Cron expressions.
+
+Parameters:
+  Region:
+    Type: String
+    Default: us-east-1
+  MemorySize:
+    Type: String
+    Default: 128
+  Timeout:
+    Type: String
+    Default: 300
+  StartWorkspaces:
+    Type: String
+    Default: 'cron(30 10 ? * MON-FRI *)'
+    Description: Cron Expression for Cloudwatch to start the Workspaces.
+  StopWorkspaces:
+    Type: String
+    Default: 'cron(00 02 ? * MON-FRI *)'
+    Description: Cron Expression for Cloudwatch to stop the Workspaces.
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: "LambdaExecutionRolePolicy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - Workspace:Describe*
+                  - Workspace:Get*
+                  - Workspace:List*
+                  - Workspace:Stop*
+                  - Workspace:Start*
+                Resource: '*'
+
+  WorkspaceStartLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "This Lambda function starts the Workspaces"
+      FunctionName: WorkspacesStart
+      Handler: index.lambda_handler
+      Runtime: 'python3.9'
+      Timeout: !Ref Timeout
+      MemorySize: !Ref MemorySize
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          region: !Ref Region
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import collections
+          import datetime
+          from botocore.exceptions import ClientError
+
+          stoppedWorkspaces=[]
+
+          def loop_workspace(response):
+          	for i in range (0,len(response['Workspaces'])):
+          		station = response['Workspaces'][i]['WorkspaceId']
+          		stoppedWorkspaces.append(station)
+
+          def lambda_handler(event, context):
+              client=boto3.client('workspaces')
+              loop=client.describe_workspaces()
+              loop_workspace(loop)
+              try:
+                  flag = True
+                  while flag:
+                      next=loop['NextToken']
+                      loop=client.describe_workspaces( NextToken=next)
+                      loop_workspace(loop)
+              except Exception as e:
+                  print ("will stop these workspaces",stoppedWorkspaces)
+
+              for workspace in stoppedWorkspaces:
+                  response = client.stop_workspaces(
+                      RebootWorkspaceRequests=[
+                          {
+                              'WorkspaceId': workspace
+                          },])
+                  print(workspace)
+    DependsOn:
+    - LambdaExecutionRole
+
+  WorkspaceStartRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "This CloudWatch rule invokes the WorkspaceStartFleets Lambda Function to start the fleets"
+      ScheduleExpression: !Ref StartWorkspaces
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt WorkspaceStartLambdaFunction.Arn
+          Id: "WorkspaceStartRule"
+    DependsOn: WorkspaceStartLambdaFunction
+
+  WorkspaceStartLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${WorkspaceStartLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${WorkspaceStartRule.Arn}
+    DependsOn: WorkspaceStartLambdaFunction
+## Below resources creates Lambda, CloudWatch rules for stop Workspace Fleets
+  WorkspaceStopLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "This Lambda function stops the Workspace"
+      FunctionName: WorkspacesStop
+      Handler: index.lambda_handler
+      Runtime: 'python3.9'
+      Timeout: !Ref Timeout
+      MemorySize: !Ref MemorySize
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          region: !Ref Region
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import collections
+          import datetime
+          from botocore.exceptions import ClientError
+
+          Workspaceslist=[]
+
+          def loop_workspace(response):
+          	for i in range (0,len(response['Workspaces'])):
+          		station = response['Workspaces'][i]['WorkspaceId']
+          		Workspaceslist.append(station)
+
+          def lambda_handler(event, context):
+              client=boto3.client('workspaces')
+              loop=client.describe_workspaces()
+              loop_workspace(loop)
+              try:
+                  flag = True
+                  while flag:
+                      next=loop['NextToken']
+                      loop=client.describe_workspaces( NextToken=next)
+                      loop_workspace(loop)
+              except Exception as e:
+                  print ("will stop these workspaces",Workspaceslist)
+
+              for workspace in Workspaceslist:
+                  response = client.stop_workspaces(
+                      RebootWorkspaceRequests=[
+                          {
+                              'WorkspaceId': workspace
+                          },])
+                  print(workspace)
+
+    DependsOn:
+    - LambdaExecutionRole
+
+  WorkspaceStopRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "This CloudWatch rule invokes the WorkspacesStop Lambda Function to stop the Workspaces"
+      ScheduleExpression: !Ref StopWorkspaces
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt WorkspaceStopLambdaFunction.Arn
+          Id: "WorkspaceStopRule"
+    DependsOn: WorkspaceStopLambdaFunction
+
+  WorkspaceStopLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${WorkspaceStopLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${WorkspaceStopRule.Arn}
+    DependsOn: WorkspaceStopLambdaFunction
