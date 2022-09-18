@@ -1,0 +1,130 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: This template creates Lambda functions, CloudWatch rules to Stop the AppStream ImageBuilders as per the Cron expressions.
+
+Parameters:
+  Region:
+    Type: String
+    Default: us-east-1
+  MemorySize:
+    Type: String
+    Default: 128
+  Timeout:
+    Type: String
+    Default: 300
+  StopAppStreamImageBuildersAt:
+    Type: String
+    Default: 'cron(00 02 ? * * *)'
+    Description: Cron Expression for Cloudwatch to stop the AppStream ImageBuilder.
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: "LambdaExecutionRolePolicy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - appstream:Describe*
+                  - appstream:List*
+                  - appstream:Stop*
+                Resource: '*'
+
+## Below resources creates Lambda, CloudWatch rules for stop AppStream ImageBuilders
+  AppStreamImageBuilderStopLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "This Lambda function stops the AppStream ImageBuilders"
+      FunctionName: AppStreamImageBuilderStop
+      Handler: index.lambda_handler
+      Runtime: 'python3.6'
+      Timeout: !Ref Timeout
+      MemorySize: !Ref MemorySize
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          region: !Ref Region
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          from botocore.exceptions import ClientError
+          import time
+          import os
+
+          client = boto3.client('appstream')
+
+          def lambda_handler(event, context):
+
+              ImageBuilderList = []
+              def loop_fleets(response):
+                for i in range (0,len(response['ImageBuilders'])):
+                  station=response['ImageBuilders'][i]['Name']
+                  ImageBuilderList.append(station)
+
+              loop = client.describe_image_builders()
+              loop_fleets(loop)
+
+              try:
+                  flag = True
+                  while flag:
+                      next=loop['NextToken']
+                      loop=client.describe_image_builders( NextToken=next)
+                      loop_fleets(loop)
+              except Exception as e:
+                  print ("Done with the Fleets")
+
+              print(ImageBuilderList)
+
+              for i in ImageBuilderList:
+                  try:
+                      response = client.stop_image_builder(Name=i)
+                      time.sleep(1)
+                      print(i +" ImageBuilder stopped")
+                      continue
+                  except ClientError as e:
+                      print ("Unexpected Error:", e)
+                      errorText = e.response['Error']['Message']
+                      print ("Error Text: ", errorText)
+                      pass
+
+    DependsOn:
+    - LambdaExecutionRole
+
+  AppStreamImageBuilderStopRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "This CloudWatch rule invokes the AppStreamImageBuilderStop Lambda Function to stop the ImageBuilders"
+      ScheduleExpression: !Ref StopAppStreamImageBuildersAt
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt AppStreamImageBuilderStopLambdaFunction.Arn
+          Id: "AppStreamImageBuilderStopRule"
+    DependsOn: AppStreamImageBuilderStopLambdaFunction
+
+  AppStreamImageBuilderStopLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${AppStreamImageBuilderStopLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${AppStreamImageBuilderStopRule.Arn}
+    DependsOn: AppStreamImageBuilderStopLambdaFunction
