@@ -1,0 +1,28 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This stack is to reboot the Ec2 instance if there is any status checks fails.
+
+Parameters:
+  RecoveryInstance:
+    Description: The EC2 instance ID to associate this alarm with.
+    Type: AWS::EC2::Instance::Id
+
+Resources:
+  Ec2InstanceAutorecoverAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref RecoveryInstance, Ec2InstanceStatusChecksRecovery ] ]
+      AlarmActions:
+      - !Sub arn:aws:automate:${AWS::Region}:ec2:reboot
+      AlarmDescription: Recover instance if its status checks fail.
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref RecoveryInstance
+      EvaluationPeriods: "1"
+      Period: 60
+      Statistic: Minimum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: "1"
+      TreatMissingData: notBreaching
+      DatapointsToAlarm: "1"
