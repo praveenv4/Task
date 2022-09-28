@@ -1,0 +1,133 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template creates Tags when Ec2 instance gets created.
+
+Parameters:
+  Region:
+    Type: String
+    Default: us-east-1
+  Ec2TagKey:
+    Type: String
+    Default: "AutoStop"
+    Description: Ec2 instance Tag key which will be used to Tag the instances.
+  Ec2TagValue:
+    Type: String
+    Default: "Enable"
+    Description: Ec2 instance Tag value which will be used to Tag the instances.
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: "LambdaExecutionRolePolicy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:CreateTags
+                Resource: '*'
+
+  TagEc2InstancesLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "This Lambda function Tag the Ec2 instances"
+      FunctionName: Auto_Tag_Ec2_Instances
+      Handler: index.lambda_handler
+      Runtime: 'python3.9'
+      Timeout: 300
+      MemorySize: 128
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          region: !Ref Region
+          Tag_Key: !Ref Ec2TagKey
+          Tag_Value: !Ref Ec2TagValue
+      Code:
+        ZipFile: |
+          from __future__ import print_function
+          import json
+          import boto3
+          import logging
+          import time
+          import datetime
+          import os
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              ids = []
+              try:
+                  region=os.environ['region']
+                  Tag_Key = os.environ['Tag_Key']
+                  Tag_Value = os.environ['Tag_Value']
+                  detail = event['detail']
+                  eventname = detail['eventName']
+
+                  ec2 = boto3.resource('ec2')
+                  if eventname == 'RunInstances':
+                      items = detail['responseElements']['instancesSet']['items']
+                      for item in items:
+                          ids.append(item['instanceId'])
+                      logger.info('number of instances: ' + str(len(ids)))
+                  else:
+                      logger.warning('Not supported action')
+
+                  if ids:
+                      for resourceid in ids:
+                          print('Tagging resource ' + resourceid)
+                      logger.info('ID Information:'+str(ids))
+                      ec2.create_tags(Resources=ids, Tags=[{'Key': Tag_Key, 'Value': Tag_Value}])
+                  logger.info(' Remaining time (ms): ' + str(context.get_remaining_time_in_millis()) + '\\n')
+                  return True
+
+              except Exception as e:
+                  logger.error('Something went wrong: ' + str(e))
+                  return False
+    DependsOn:
+    - LambdaExecutionRole
+  TagEc2InstancesRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "This CloudWatch rule invokes the Lambda Function to tag the instances."
+      EventPattern:
+        source:
+          - "aws.ec2"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource:
+            - "ec2.amazonaws.com"
+          eventName:
+            - "RunInstances"
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt TagEc2InstancesLambdaFunction.Arn
+          Id: "TagEc2InstancesRule"
+    DependsOn: TagEc2InstancesLambdaFunction
+
+  TagEc2InstancesLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${TagEc2InstancesLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${TagEc2InstancesRule.Arn}
+    DependsOn: TagEc2InstancesLambdaFunction
