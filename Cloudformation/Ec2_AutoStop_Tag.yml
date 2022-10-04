@@ -1,0 +1,220 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template creates Lambda functions, CloudWatch rules to Start and Stop the AppStream Fleets as per the Cron expressions.
+
+Parameters:
+  Region:
+    Type: String
+    Default: us-east-1
+  MemorySize:
+    Type: String
+    Default: 128
+  Timeout:
+    Type: String
+    Default: 300
+  Ec2TagKey:
+    Type: String
+    Default: "AutoOff"
+    Description: Ec2 instance Tag key which will be used to Tag/stop the instances.
+  Ec2TagValue:
+    Type: String
+    Default: "True"
+    Description: Ec2 instance Tag value which will be used to Tag/stop the instances.
+  InvokeAutoStopLambdaAt:
+    Type: String
+    Default: 'cron(30 10 ? * MON-FRI *)'
+    Description: Cron Expression for Cloudwatch to start the AppStream Fleets.
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: "LambdaExecutionRolePolicy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:CreateTags
+                  - ec2:StopInstances
+                Resource: '*'
+
+  TagEc2InstancesLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "This Lambda function starts the AppStream fleets"
+      FunctionName: CDW_Tag_Ec2_Instances
+      Handler: index.lambda_handler
+      Runtime: 'python3.6'
+      Timeout: !Ref Timeout
+      MemorySize: !Ref MemorySize
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          region: !Ref Region
+          Tag_Key: !Ref Ec2TagKey
+          Tag_Value: !Ref Ec2TagValue
+      Code:
+        ZipFile: |
+          from __future__ import print_function
+          import json
+          import boto3
+          import logging
+          import time
+          import datetime
+          import os
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              ids = []
+              try:
+                  region=os.environ['region']
+                  Tag_Key = os.environ['Tag_Key']
+                  Tag_Value = os.environ['Tag_Value']
+                  detail = event['detail']
+                  eventname = detail['eventName']
+
+                  ec2 = boto3.resource('ec2')
+                  if eventname == 'RunInstances':
+                      items = detail['responseElements']['instancesSet']['items']
+                      for item in items:
+                          ids.append(item['instanceId'])
+                      logger.info('number of instances: ' + str(len(ids)))
+                  else:
+                      logger.warning('Not supported action')
+
+                  if ids:
+                      for resourceid in ids:
+                          print('Tagging resource ' + resourceid)
+                      logger.info('ID Information:'+str(ids))
+                      ec2.create_tags(Resources=ids, Tags=[{'Key': Tag_Key, 'Value': Tag_Value}])
+                  logger.info(' Remaining time (ms): ' + str(context.get_remaining_time_in_millis()) + '\\n')
+                  return True
+
+              except Exception as e:
+                  logger.error('Something went wrong: ' + str(e))
+                  return False
+    DependsOn:
+    - LambdaExecutionRole
+  TagEc2InstancesRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "This CloudWatch rule invokes the Lambda Function to tag the instances."
+      EventPattern:
+        source:
+          - "aws.ec2"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource:
+            - "ec2.amazonaws.com"
+          eventName:
+            - "RunInstances"
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt TagEc2InstancesLambdaFunction.Arn
+          Id: "TagEc2InstancesRule"
+    DependsOn: TagEc2InstancesLambdaFunction
+
+  TagEc2InstancesLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${TagEc2InstancesLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${TagEc2InstancesRule.Arn}
+    DependsOn: TagEc2InstancesLambdaFunction
+######## Auto Stop Ec2 ########
+  AutoStopEc2InstancesLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "This Lambda function starts the AppStream fleets"
+      FunctionName: CDW_AutoStop_Ec2_Instances
+      Handler: index.lambda_handler
+      Runtime: 'python3.6'
+      Timeout: !Ref Timeout
+      MemorySize: !Ref MemorySize
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          region: !Ref Region
+          Tag_Key: !Ref Ec2TagKey
+          Tag_Value: !Ref Ec2TagValue
+      Code:
+        ZipFile: |
+          import os
+          import boto3
+          import logging
+
+          #setup simple logging for INFO
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          #define the connection
+          ec2 = boto3.resource('ec2')
+
+          def lambda_handler(event, context):
+              # Use the filter() method of the instances collection to retrieve
+              # all running EC2 instances.
+              Tag_Key = os.environ['Tag_Key']
+              Tag_Value = os.environ['Tag_Value']
+              filters = [{
+                      'Name': 'tag:'+ str(Tag_Key),
+                      'Values': [str(Tag_Value)]
+                  },
+                  {
+                      'Name': 'instance-state-name',
+                      'Values': ['running']
+                  }
+              ]
+              #filter the instances
+              instances = ec2.instances.filter(Filters=filters)
+              #locate all running instances
+              RunningInstances = [instance.id for instance in instances]
+              print(RunningInstances)
+              #make sure there are actually instances to shut down.
+              if len(RunningInstances) > 0:
+                  #perform the shutdown
+                  shuttingDown = ec2.instances.filter(InstanceIds=RunningInstances).stop()
+                  print(shuttingDown)
+              else:
+                  print("No instances to stop!!")
+    DependsOn:
+    - LambdaExecutionRole
+  AutoStopEc2InstanceRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "This CloudWatch rule invokes the Lambda Function to Stop the instances."
+      ScheduleExpression: !Ref InvokeAutoStopLambdaAt
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt AutoStopEc2InstancesLambdaFunction.Arn
+          Id: "AutoStopEc2InstanceRule"
+    DependsOn: AutoStopEc2InstancesLambdaFunction
+
+  AutoStopEc2InstancesLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${AutoStopEc2InstancesLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${AutoStopEc2InstanceRule.Arn}
+    DependsOn: AutoStopEc2InstancesLambdaFunction
