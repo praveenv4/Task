@@ -1,0 +1,107 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template creates Lambda function, CloudWatch rule to reboot workspaces.
+
+Parameters:
+  InvokeRebootWsLambdaAt:
+    Type: String
+    Default: 'cron(00 06 ? * SUN *)'
+    Description: Cron Expression for Cloudwatch to reboot workspaces.
+
+Resources:
+  WsLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - workspaces:DescribeWorkspaces
+                  - workspaces:RebootWorkspaces
+                Resource: '*'
+
+######## Auto reboot workspaces ########
+  AutorebootWorkspacesLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "This Lambda function reboot workspaces"
+      FunctionName: !Sub ${AWS::StackName}
+      Handler: index.lambda_handler
+      Runtime: 'python3.9'
+      Timeout: 300
+      MemorySize: 128
+      Role: !GetAtt WsLambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import os
+          import boto3
+          import datetime
+          from botocore.exceptions import ClientError
+
+          Workspaceslist=[]
+
+          def loop_workspace(response):
+          	for i in range (0,len(response['Workspaces'])):
+          		station = response['Workspaces'][i]['WorkspaceId']
+          		Workspaceslist.append(station)
+
+          def lambda_handler(event, context):
+              client=boto3.client('workspaces')
+              loop=client.describe_workspaces()
+              loop_workspace(loop)
+              try:
+                  flag = True
+                  while flag:
+                      next=loop['NextToken']
+                      loop=client.describe_workspaces( NextToken=next)
+                      loop_workspace(loop)
+              except Exception as e:
+                  print ("will restart these workspaces",Workspaceslist)
+
+              print(len(Workspaceslist))
+
+              for workspace in Workspaceslist:
+                  response = client.reboot_workspaces(
+                      RebootWorkspaceRequests=[
+                          {
+                              'WorkspaceId': workspace
+                          },])
+                  print(workspace)
+    DependsOn:
+    - WsLambdaExecutionRole
+  AutorebootWorkspacesRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "This CloudWatch rule invokes the Lambda Function to reboot Workspaces."
+      ScheduleExpression: !Ref InvokeRebootWsLambdaAt
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt AutorebootWorkspacesLambdaFunction.Arn
+          Id: "AutorebootWorkspacesRule"
+    DependsOn: AutorebootWorkspacesLambdaFunction
+
+  AutorebootWorkspacesLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${AutorebootWorkspacesLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${AutorebootWorkspacesRule.Arn}
+    DependsOn: AutorebootWorkspacesLambdaFunction
