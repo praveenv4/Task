@@ -1,0 +1,74 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This stack will provision Ec2 instance with IAM Role attached.
+Parameters:
+  VpcId:
+    Default: vpc-0fa0fd119102f31b9
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0fa0fd119102f31b9
+  ServerSubnet:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-07a5144e30914aa9d
+  ServerAMI:
+    Default: ami-0c2b0d3fb02824d92
+    Type: String
+  InstanceType:
+    Default: t2.small
+    Type: String
+  ServerSecurityGroup:
+    Default: sg-09055a1b1ef398c8e
+    Type: String
+  KeyName:
+    Default: praveenkey
+    Type: String
+  InstanceName:
+    Default: Ec2-Instance-From-CF
+    Type: String
+
+#Define Resources
+Resources:
+  Ec2Server:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref 'InstanceType'
+      ImageId: !Ref 'ServerAMI'
+      SecurityGroupIds:
+        - !Ref 'ServerSecurityGroup'
+      SubnetId: !Ref 'ServerSubnet'
+      IamInstanceProfile: !Ref Ec2InstanceProfile
+      KeyName: !Ref 'KeyName'
+      Tags:
+        - Key: Name
+          Value: !Ref InstanceName
+
+  IamRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName:
+        !Join
+        - ""
+        - - !Ref InstanceName
+          - "-role"
+      Description: "EC2 IAM role for SSM access"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Policies: []
+
+  Ec2InstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      InstanceProfileName:
+        !Join
+        - ""
+        - - !Ref InstanceName
+          - "-InstanceProfile"
+      Roles:
+        - Ref: "IamRole"
