@@ -14,6 +14,7 @@ pipeline {
       steps{
         script{
             //Initializes Maps and lists
+	    echo params.ReleaseBranch
             echo params.Action
             echo "${RFCInformation}"
             echo "${RFCTags}"
