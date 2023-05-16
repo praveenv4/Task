@@ -1,0 +1,94 @@
+def rootDnsName
+def params_list = []
+def getEnvUUID(params_list) {
+    rootDnsName = params_list.find { it.Name == "RootDnsName" }?.Value ?: ""
+    return rootDnsName
+    }
+pipeline {
+    // agent any
+    agent {
+    docker { image 'amazonlinux:latest' }
+  }
+// 	parameters {
+//         string(name: 'VERSION', defaultValue: '1.0', description: 'Version number')
+//         booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run tests?')
+//     }
+  stages{
+    stage('Trigger PipelineJob-2'){
+      steps{
+        script{
+            //Initializes Maps and lists
+            echo params.Action
+                              //Takes info passed from CloudFormationParameters Parameter, converts to map, adds to rfc_parameters map
+            try {
+                rfc_params = env.RFCInformation.split(",")
+                             //					echo "${cft_params}"
+                for (int i = 0; i < rfc_params.size(); i+=2) {
+                    def rparams = [:]
+                                 //distinguishes whether to put "Key" or "Name" as the tag for the parameter
+                    if (params.Action == 'Create') {
+                        rparams.put("Name", rfc_params[i].trim())
+                    }
+                    if (params.Action == 'Update') {
+                        rparams.put("Key", rfc_params[i].trim())
+                    }
+                    //resumes original logic
+                    if(rfc_params[i] == "ECSServiceName") {
+                        rparams.put("Value", rfc_params[i+1].toLowerCase())
+                    } else {
+                        rparams.put("Value", rfc_params[i+1].trim())
+                    }
+                    params_list.add(rparams)
+                }
+                
+                echo "${params_list}"
+            } catch (ArrayIndexOutOfBoundsException ex) {
+                print('No RFC Params: ' +ex.toString())
+                currentBuild.result = 'ABORTED'
+                                      error("Aborting the build.")
+                                      throw ex
+            }
+            echo "==== params_list ===="
+            echo "${params_list}"
+            echo "RFC Parameters...."
+            echo "${params}"
+            echo "rootDnsName Parameter value...."
+            // def rootDnsName = ""
+            // params_list.each { param ->
+            //     if (param.Name == "RootDnsName") {
+            //         rootDnsName = param.Value
+            //     }
+            // }
+            sh "echo 'Building version ${params.VERSION}...'"
+            // echo "TenantDomainPrefix,${TenantName},DbCanary,${TenantName}-db,MqCanary,${TenantName}-mq,RlCanary,${TenantName}-rl,EmailDistribution,crs-aws-alert@crsoftware.com,CanarySchedule,rate(30 minutes),SecurityGroupIds,sg-017a4d00ca520b3ab,SubnetIds,subnet-027bcea04db3916ac,VpcId,vpc-0f030dd9e1d1d38e1,RootDnsName,"
+            params.each {param ->
+                      println "${param.key} -> ${param.value} "
+                    }
+		    sh "echo 'Building version END...'"
+        }
+      }
+    }
+    
+    // stage('Trigger Print Paranms'){
+    //   steps{
+    //     script{
+    //         // echo "Printing rootDnsName"
+    //         // rootDnsName = getEnvUUID(params_list)
+    //         echo "${DnsName}"
+    //         echo params.DnsName
+    //         build job: 'PipelineJob-2',parameters: [
+    // 		string(name: 'Action', value: params.Action),
+    // 		string(name: 'LZ', value: LZ),
+    // 		string(name: 'CICD_REGION', value: CICD_REGION),
+    // 		string(name: 'AWS_DEPLOYMENT_REGION', value: AWS_DEPLOYMENT_REGION),
+    // 		string(name: 'STAGE', value: STAGE),
+    // 		string(name: 'TenantDomainPrefix', value: TenantName),
+    // 		string(name: 'RFCTags', value: 'Application,DebtManager,'),
+    // 		string(name: 'RFCInformation', value: "TenantDomainPrefix,${TenantName},DbCanary,${TenantName}-db,MqCanary,${TenantName}-mq,RlCanary,${TenantName}-rl,EmailDistribution,crs-aws-alert@crsoftware.com,CanarySchedule,rate(15 minutes),RootDnsName,${DnsName}")
+    // 		]
+            
+    //     }
+    //   }
+    // }
+  }     
+}
