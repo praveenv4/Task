@@ -1,0 +1,28 @@
+pipeline {
+    // agent any
+    agent {
+    docker { image 'amazonlinux:latest' }
+  }
+    stages {
+        stage('Add RFC Information') {
+            steps {
+              script {
+                  echo params.RFCInformation
+                    // def RFCInformation = RFCInformation
+                    // RFCInformation['rootdns'] = default_domain
+                    // echo RFCInformation
+                    
+                }
+            }
+        }
+        stage('Print parameters') {
+            steps {
+              script {
+                    params.each {param ->
+                      println "${param.key} -> ${param.value} "
+                    }
+                }
+            }
+        }
+    }
+}
