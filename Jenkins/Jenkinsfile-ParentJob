@@ -60,7 +60,7 @@ pipeline {
             // echo "${DnsName}"
             // echo params.DnsName
             build job: 'PipelineJob-2',parameters: [
-	    	string(name: 'GitBranch', value: params.ReleaseBranch),
+	    	string(name: 'ReleaseBranch', value: "${ReleaseBranch}"),
     		string(name: 'Action', value: params.Action),
     		string(name: 'LZ', value: LZ),
     		string(name: 'CICD_REGION', value: CICD_REGION),
