@@ -8,6 +8,7 @@ pipeline {
             steps {
               script {
                   echo params.RFCInformation
+                  echo params.ReleaseBranch
                     // def RFCInformation = RFCInformation
                     // RFCInformation['rootdns'] = default_domain
                     // echo RFCInformation
