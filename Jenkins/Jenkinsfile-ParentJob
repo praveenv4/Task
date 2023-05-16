@@ -1,0 +1,75 @@
+def rootDnsName
+def params_list = []
+def getEnvUUID(params_list) {
+    rootDnsName = params_list.find { it.Name == "RootDnsName" }?.Value ?: ""
+    return rootDnsName
+    }
+pipeline {
+    // agent any
+    agent {
+    docker { image 'amazonlinux:latest' }
+  }
+  stages{
+     stage('Trigger PipelineJob-1'){
+      steps{
+        script{
+            //Initializes Maps and lists
+            echo params.Action
+            echo "${RFCInformation}"
+            echo "${RFCTags}"
+            build job: 'PipelineJob-1',parameters: [
+    		string(name: 'Action', value: params.Action),
+    		string(name: 'LZ', value: LZ),
+    		string(name: 'CICD_REGION', value: CICD_REGION),
+    		string(name: 'AWS_DEPLOYMENT_REGION', value: AWS_DEPLOYMENT_REGION),
+    		string(name: 'STAGE', value: STAGE),
+    		string(name: 'TenantName', value: TenantName),
+    		string(name: 'TenantSlot', value: TenantSlot),
+    		string(name: 'Namespace', value: Namespace),
+    		string(name: 'RFCTags', value: "${RFCTags}"),
+    		string(name: 'RFCInformation', value: "${RFCInformation}"),
+    		string(name: 'FitAppsExt', value: FitAppsExt)
+    		]
+        }
+      }
+    }
+    stage('Trigger PipelineJob-2'){
+      steps{
+        script{
+            switch (LZ) {
+			case 'United_States':
+				extension = '.com'
+				break
+			case 'London':
+				extension = '.co.uk'
+				break
+			case 'European_Union':
+				extension = '.eu'
+				break
+			}
+			if (STAGE !="PRD"){
+				rootDnsName = "${STAGE.toLowerCase()}.debtmanager.crsoftwarecloud${extension}"
+			}
+			else{
+				rootDnsName = "debtmanager.crsoftwarecloud${extension}"
+			}
+			echo "${rootDnsName}"
+            echo params.RFCInformation
+            // echo "${DnsName}"
+            // echo params.DnsName
+            build job: 'PipelineJob-2',parameters: [
+    		string(name: 'Action', value: params.Action),
+    		string(name: 'LZ', value: LZ),
+    		string(name: 'CICD_REGION', value: CICD_REGION),
+    		string(name: 'AWS_DEPLOYMENT_REGION', value: AWS_DEPLOYMENT_REGION),
+    		string(name: 'STAGE', value: STAGE),
+    		string(name: 'TenantDomainPrefix', value: TenantName),
+    		string(name: 'RFCTags', value: "${RFCTags}"),
+    		string(name: 'RFCInformation', value: "TenantDomainPrefix,${TenantName},DbCanary,${TenantName}-db,MqCanary,${TenantName}-mq,RlCanary,${TenantName}-rl,EmailDistribution,crs-aws-alert@crsoftware.com,CanarySchedule,rate(15 minutes),RootDnsName,${rootDnsName}")
+    		]
+            
+        }
+      }
+    }
+  }     
+}
