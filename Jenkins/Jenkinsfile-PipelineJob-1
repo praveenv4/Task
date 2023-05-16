@@ -18,6 +18,7 @@ pipeline {
       steps{
         script{
             //Initializes Maps and lists
+	    echo params.ReleaseBranch
             echo params.Action
                               //Takes info passed from CloudFormationParameters Parameter, converts to map, adds to rfc_parameters map
             try {
