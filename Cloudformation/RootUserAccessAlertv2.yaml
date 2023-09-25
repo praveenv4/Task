@@ -1,0 +1,163 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template is to notify you when there is a root User activity
+
+Parameters:
+  EmailIdtoNotify:
+    Type: String
+    Default: example@yourcorp.com
+
+Resources:
+  RootActivitySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Root-ALERT
+      Subscription:
+      - Endpoint: !Ref EmailIdtoNotify
+        Protocol: email
+      TopicName: RootActivitySNSTopic
+
+  EventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Events rule for monitoring root API activity
+      EventPattern:
+        detail-type:
+        - AWS Console Sign In via CloudTrail
+        detail:
+          userIdentity:
+            type:
+            - Root
+      Name:
+        Fn::Sub: "RootActivityRule"
+      State: ENABLED
+      Targets:
+      - Arn:
+          Fn::GetAtt:
+          - RootActivityLambda
+          - Arn
+        Id: Trigger
+
+  RootActivityLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from botocore.exceptions import ClientError
+
+          def lambda_handler(event, context):
+          	# print(event)
+          	print("User:", event['detail']['userIdentity']['type'])
+          	print("AccountID:", event['account'])
+          	print("Time Stamp:", event['time'])
+          	snsARN = os.environ['SNSARN'] #Getting the SNS Topic ARN passed in by the environment variables.
+          	user = event['detail']['userIdentity']['type']
+          	AccountID = event['account']
+          	TimeStamp = event['time']
+
+          	client = boto3.client('iam')
+          	snsclient = boto3.client('sns')
+          	if user == 'Root':
+          		try:
+          			print("Sending the notification...")
+          			message = f"Hi Team,\n\nUser logged into AWS using root account credentials.\n\nUser: {user}\nAccountID: {AccountID}\nTime Stamp: {TimeStamp}\n\nThanks,\nAWS Alerts"
+          			snspublish = snsclient.publish(
+          							TargetArn= snsARN,
+          							Subject=((f"Root User Access Detected For AWS Account - {AccountID}")),
+          							Message=message
+          							)
+          		except ClientError as e:
+          			print(e)
+      Handler: index.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - LambdaRootAPIMonitorRole
+        - Arn
+      Runtime: python3.10
+      Timeout: 300
+      Environment:
+        Variables:
+          SNSARN:
+            Ref: RootActivitySNSTopic
+
+  LambdaRootAPIMonitorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      RoleName:
+        Fn::Sub: "LambdaRootAPIMonitorRole"
+
+  LambdaRootAPIMonitorPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: LambdaRootAPIMonitorRole
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: LogStreamAccess
+          Effect: Allow
+          Action:
+          - logs:CreateLogGroup
+          - logs:CreateLogStream
+          - logs:PutLogEvents
+          Resource:
+          - arn:aws:logs:*:*:*
+        - Sid: SNSPublishAllow
+          Effect: Allow
+          Action:
+          - sns:Publish
+          Resource:
+          - arn:aws:sns:*:*:*
+        - Sid: ListAccountAlias
+          Action:
+          - iam:ListAccountAliases
+          Effect: Allow
+          Resource: "*"
+      PolicyName:
+        Fn::Sub: "LambdaRootAPIMonitorPolicy"
+      Roles:
+      - Ref: LambdaRootAPIMonitorRole
+
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Ref: RootActivityLambda
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+        - EventsRule
+        - Arn
+Outputs:
+  EventsRule:
+    Value:
+      Ref: EventsRule
+    Export:
+      Name:
+        Fn::Sub: "RootAPIMonitorEventsRule"
+    Description: Event Rule ID.
+  LambdaFuncName:
+    Value:
+      Ref: RootActivityLambda
+    Export:
+      Name:
+        Fn::Sub: "RootAPIMonitorLambda"
+    Description: Lambda function logical ID.
+  SNSTopicName:
+    Value:
+      Ref: RootActivitySNSTopic
+    Export:
+      Name:
+        Fn::Sub: "RootAPIMonitorSNSTopic"
+    Description: SNS Topic Name.
